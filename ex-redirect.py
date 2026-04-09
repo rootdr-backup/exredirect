@@ -1,6 +1,6 @@
 import argparse
 import requests
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 from termcolor import cprint, colored
 from collections import defaultdict
 from tqdm import tqdm
@@ -45,14 +45,41 @@ def fetch_wayback_urls(domain, retries=3, delay=5):
     cprint("[X] Failed to fetch Wayback URLs after multiple attempts.", "red")
     return []
 
+# Parameter names commonly associated with open redirects
+REDIRECT_PARAMS = {
+    'url', 'redirect', 'redirect_url', 'redirect_uri', 'redir', 'redir_url',
+    'next', 'next_url', 'return', 'return_url', 'returnto', 'return_to',
+    'goto', 'go', 'dest', 'destination', 'target', 'to', 'out', 'link',
+    'continue', 'continue_url', 'forward', 'forward_url', 'location',
+    'callback', 'cb', 'jump', 'navigate', 'returl', 'success_url',
+    'fail_url', 'error_url', 'checkout_url', 'image_url', 'logout',
+    'login_url', 'signin', 'ref', 'site', 'view', 'page',
+}
+
 def is_potential_redirect(url):
     try:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
-        for values in params.values():
+        for key, values in params.items():
+            key_lower = key.lower()
             for val in values:
-                if re.match(r'^(https?:\/\/|\/)', val.strip()):
+                val = val.strip()
+                # Decode URL-encoded values for deeper inspection
+                decoded_val = unquote(val)
+                # Check for dangerous URI schemes
+                if re.match(r'^(https?:\/\/|javascript:|data:|vbscript:)', decoded_val, re.IGNORECASE):
                     return True
+                # Check for protocol-relative URLs (//evil.com)
+                if re.match(r'^[\/\\]{2}', decoded_val):
+                    return True
+                # Check for backslash prefix (\evil.com) - browsers normalize to /
+                if re.match(r'^\\', decoded_val):
+                    return True
+                # Check for relative paths starting with / only when param name
+                # is a known redirect parameter (reduces false positives)
+                if re.match(r'^\/', decoded_val):
+                    if key_lower in REDIRECT_PARAMS:
+                        return True
     except:
         pass
     return False
